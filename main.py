@@ -1,5 +1,5 @@
 """
-Simulasi Sistem IoT Smart Greenhouse: 
+Simulasi Sistem IoT Smart Greenhouse:
 Pemantauan Iklim Mikro (Suhu, Kelembapan, Cahaya) dan Sistem Deteksi Hama Berbasis ESP32 Terintegrasi Cloud
 """
 
@@ -24,6 +24,9 @@ oled = ssd1306.SSD1306_I2C(128, 64, i2c)
 
 led = Pin(2, Pin.OUT)
 
+BUZZER_PIN = 21
+buzzer = Pin(BUZZER_PIN, Pin.OUT)
+
 # ========== PARAMETER GREENHOUSE ==========
 TEMP_MIN = 20  # Celsius
 TEMP_MAX = 30  # Celsius
@@ -43,6 +46,14 @@ MAX_DHT_ERRORS = 3
 last_mqtt_check = 0
 MQTT_CHECK_INTERVAL = 30000
 
+last_led_toggle = 0
+LED_BLINK_INTERVAL = 200  # Lebih cepat berkedip
+
+last_buzzer_toggle = 0
+BUZZER_BEEP_INTERVAL = 200  # Lebih cepat beep
+BUZZER_BEEP_DURATION = 100
+
+
 def read_dht_sensor():
     global current_temp, current_humid, dht_error_count
 
@@ -55,7 +66,7 @@ def read_dht_sensor():
             print(f"DHT11 - Suhu: {current_temp}°C, Kelembapan: {current_humid}%")
             return True
         except OSError as e:
-            if attempt < 2: 
+            if attempt < 2:
                 time.sleep(0.5)
             dht_error_count += 1
 
@@ -121,6 +132,7 @@ def display_normal_status():
     oled.text("Status: OK", 0, 50)
     oled.show()
 
+
 def display_anomaly_alert():
     oled.fill(0)
 
@@ -132,7 +144,7 @@ def display_anomaly_alert():
 
     lines = anomaly_status.split("\n")
     y_pos = 35
-    for line in lines[:2]: 
+    for line in lines[:2]:
         oled.text(line[:16], 0, y_pos)
         y_pos += 10
 
@@ -206,11 +218,32 @@ def publish_to_cloud():
 
 # ========== FUNGSI LED INDIKATOR ==========
 def update_led_indicator():
+    global last_led_toggle
     if pest_detected or anomaly_status != "OPTIMAL":
-        # Blink LED jika ada anomali
-        led.value(not led.value())
+        current_time = time.ticks_ms()
+        if time.ticks_diff(current_time, last_led_toggle) >= LED_BLINK_INTERVAL:
+            led.value(not led.value())
+            last_led_toggle = current_time
     else:
         led.value(0)
+
+
+# ========== FUNGSI BUZZER INDIKATOR ==========
+buzzer_state = 0
+
+
+def update_buzzer_indicator():
+    global last_buzzer_toggle, buzzer_state
+
+    if pest_detected or anomaly_status != "OPTIMAL":
+        current_time = time.ticks_ms()
+        if time.ticks_diff(current_time, last_buzzer_toggle) >= BUZZER_BEEP_INTERVAL:
+            buzzer_state = not buzzer_state
+            buzzer.value(buzzer_state)
+            last_buzzer_toggle = current_time
+    else:
+        buzzer.value(0)
+        buzzer_state = 0
 
 
 # ========== MAIN LOOP ==========
@@ -239,44 +272,57 @@ def main():
 
     loop_count = 0
 
+    last_dht_read = 0
+    DHT_READ_INTERVAL = 2000  # Baca DHT setiap 2 detik
+    last_display_update = 0
+    DISPLAY_UPDATE_INTERVAL = 500  # Update display setiap 500ms
+
     while True:
         try:
-            # 1. Baca sensor DHT11 (suhu & kelembapan)
-            dht_success = read_dht_sensor()
+            current_time = time.ticks_ms()
 
-            if not dht_success and dht_error_count > MAX_DHT_ERRORS:
-                print("DHT11 error threshold exceeded, skipping cycle...")
-                time.sleep(5)
-                continue
-
-            # 2. Baca sensor PIR (deteksi hama)
+            # 1. Baca sensor PIR terus menerus (prioritas tinggi, tanpa delay)
             read_pir_sensor()
 
-            # 3. Analisis kondisi greenhouse
+            # 2. Update LED & Buzzer indikator setiap loop (tanpa delay)
+            update_led_indicator()
+            update_buzzer_indicator()
+
+            # 3. Baca sensor DHT11 dengan interval (hemat resource)
+            if time.ticks_diff(current_time, last_dht_read) >= DHT_READ_INTERVAL:
+                dht_success = read_dht_sensor()
+                last_dht_read = current_time
+
+                if not dht_success and dht_error_count > MAX_DHT_ERRORS:
+                    print("DHT11 error threshold exceeded, skipping DHT read...")
+
+            # 4. Analisis kondisi greenhouse
             status = analyze_greenhouse_condition()
 
-            # 4. Update OLED Display
-            update_display()
+            # 5. Update OLED Display dengan interval
+            if (
+                time.ticks_diff(current_time, last_display_update)
+                >= DISPLAY_UPDATE_INTERVAL
+            ):
+                update_display()
+                last_display_update = current_time
 
-            # 5. Check and maintain MQTT connection
+            # 6. Check and maintain MQTT connection
             check_and_reconnect_mqtt()
 
-            # 6. Publish data ke cloud MQTT
+            # 7. Publish data ke cloud MQTT
             publish_to_cloud()
-
-            # 7. Update LED indikator
-            update_led_indicator()
 
             # Log setiap 10 loop
             loop_count += 1
-            if loop_count % 10 == 0:
+            if loop_count % 50 == 0:  # Kurangi frekuensi log
                 print(f"\n[Loop #{loop_count}] Status Greenhouse: {status}")
                 print(
                     f"Suhu: {current_temp}°C | Kelembapan: {current_humid}% | Hama: {'YA' if pest_detected else 'TIDAK'}\n"
                 )
 
-            # Delay sebelum pembacaan berikutnya
-            time.sleep(2)
+            # Delay minimal agar loop tetap responsif
+            time.sleep_ms(50)  # 50ms delay, sangat responsif
 
         except KeyboardInterrupt:
             print("\n\nSistem dihentikan oleh user")
@@ -295,6 +341,6 @@ def main():
             print(f"Error di main loop: {e}")
             time.sleep(5)
 
+
 if __name__ == "__main__":
     main()
-
