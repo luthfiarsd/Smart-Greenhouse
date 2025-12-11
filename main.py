@@ -184,6 +184,22 @@ def check_and_reconnect_mqtt():
                 print(f"Reconnection failed: {e2}")
 
 
+def get_status_code():
+    """Convert status text to numeric code for Ubidots"""
+    status_mapping = {
+        "OPTIMAL": 0,
+        "HAMA TERDETEKSI!": 1,
+        "SUHU TINGGI": 2,
+        "SUHU RENDAH": 3,
+        "LEMBAB TINGGI": 4,
+        "LEMBAB RENDAH": 5,
+        "SUHU TINGGI\nLEMBAB TINGGI": 6,
+        "SUHU TINGGI\nLEMBAB RENDAH": 7,
+        "SUHU RENDAH\nLEMBAB TINGGI": 8,
+        "SUHU RENDAH\nLEMBAB RENDAH": 9,
+    }
+    return status_mapping.get(anomaly_status, 99)
+
 # ========== FUNGSI MQTT PUBLISHING ==========
 def publish_to_cloud():
     global last_mqtt_publish
@@ -201,18 +217,26 @@ def publish_to_cloud():
                 "temperature": current_temp,
                 "humidity": current_humid,
                 "pest_detected": 1 if pest_detected else 0,  # 1 = detected, 0 = clear
-                "status": (
-                    1 if anomaly_status == "OPTIMAL" else 0
-                ),  # 1 = optimal, 0 = anomali
+                "status": get_status_code(),
             }
 
+            # Publish ke MQTT (Ubidots)
             boot.publish_data(payload)
 
+            # Kirim ke Google Sheets
+            sheets_payload = {
+                "temperature": current_temp,
+                "humidity": current_humid,
+                "pest_detected": 1 if pest_detected else 0,
+                "status": anomaly_status,  # Kirim status text
+            }
+            boot.send_to_google_sheets(sheets_payload)
+
             last_mqtt_publish = current_time
-            print(f"Data published to Ubidots - Status: {anomaly_status}")
+            print(f"Data published to Cloud - Status: {anomaly_status}")
 
         except Exception as e:
-            print(f"Error publishing to MQTT: {e}")
+            print(f"Error publishing to Cloud: {e}")
             boot.mqtt_client = None
 
 

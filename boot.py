@@ -2,6 +2,7 @@ import network
 import time
 from umqtt.simple import MQTTClient
 import machine
+import urequests
 
 WIFI_SSID = "KOST RAYA 2"
 WIFI_PASSWORD = "cikuda03"
@@ -16,7 +17,10 @@ DEVICE_LABEL = "smart-greenhouse"
 
 MQTT_TOPIC_PUBLISH = "/v1.6/devices/" + DEVICE_LABEL
 
+GOOGLE_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyz9jjuty9m-EJvXZm6uM5s10SYLJJSNrYGww_NrSiZV1cDM0XwGEc5WYeYGtdE21_s/exec"
+
 mqtt_client = None
+
 
 def connect_wifi():
     wlan = network.WLAN(network.STA_IF)
@@ -80,6 +84,61 @@ def publish_data(payload_dict):
         except:
             pass
     return False
+
+
+def send_to_google_sheets(data_dict):
+    """
+    Mengirim data ke Google Sheets via Apps Script webhook
+    data_dict: {"temperature": 25, "humidity": 70, "pest_detected": 0, "status": "OPTIMAL"}
+    """
+    try:
+        # Google Apps Script biasanya menerima data sebagai query parameters
+        # Encode URL untuk menghindari error dengan karakter khusus
+
+        def url_encode(s):
+            """Simple URL encoding untuk MicroPython"""
+            s = str(s)
+            s = s.replace(" ", "%20")
+            s = s.replace("\n", "%0A")
+            s = s.replace("!", "%21")
+            return s
+
+        # Konversi data_dict ke query string
+        params = []
+        for key, value in data_dict.items():
+            encoded_value = url_encode(value)
+            params.append(f"{key}={encoded_value}")
+
+        query_string = "&".join(params)
+        url_with_params = f"{GOOGLE_APPS_SCRIPT_URL}?{query_string}"
+
+        print(f"Sending to Google Sheets...")
+
+        # Gunakan GET request (lebih kompatibel dengan Google Apps Script)
+        response = urequests.get(url_with_params)
+
+        # print(f"Google Sheets Response: {response.status_code}")
+
+        # # Ambil response text hanya jika ada
+        # try:
+        #     resp_text = response.text
+        #     if len(resp_text) < 200:  # Hanya print jika tidak terlalu panjang
+        #         print(f"Response: {resp_text}")
+        # except:
+        #     pass
+
+        response.close()
+
+        if response.status_code == 200 or response.status_code == 302:
+            print("✓ Data berhasil dikirim ke Google Sheets")
+            return True
+        # else:
+        #     # print(f"✗ Gagal mengirim ke Google Sheets: {response.status_code}")
+        #     return False
+
+    except Exception as e:
+        print(f"Error sending to Google Sheets: {e}")
+        return False
 
 
 # Inisialisasi koneksi saat boot
